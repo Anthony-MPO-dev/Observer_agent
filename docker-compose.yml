@@ -1,0 +1,171 @@
+# =============================================================================
+# POC LogStream — Docker Compose
+#
+# Stack completa para demonstracao:
+#   - mock-api:   FastAPI que gera logs simulados (simula workers Celery)
+#   - log-server: Servidor gRPC + REST que recebe, persiste e serve logs
+#   - log-dashboard: Frontend React com visualizacao em tempo real
+#   - log-agent:  Sidecar Go que observa arquivos .log e envia ao server
+#   - redis:      Offset persistence (agent) + dedup (server)
+#
+# Uso:
+#   docker compose up --build -d
+#   Acesse o dashboard em http://localhost:3000
+# =============================================================================
+
+services:
+
+  # ---------------------------------------------------------------------------
+  # Mock API — gera logs no formato esperado pelo logstream
+  # ---------------------------------------------------------------------------
+  mock-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: poc-mock-api
+    ports:
+      - "8000:8000"
+    environment:
+      LOG_DIR: /app/logs
+      LOG_PREFIX: dados_basicos
+    volumes:
+      - poc_logs:/app/logs
+    networks:
+      - poc-logstream
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # ---------------------------------------------------------------------------
+  # Mock Dependencies — simula servicos externos (Receita, Bureaus, Cache)
+  # ---------------------------------------------------------------------------
+  mock-dependencies:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: poc-mock-dependencies
+    ports:
+      - "8001:8001"
+    command: ["uvicorn", "app.dependencies:app", "--host", "0.0.0.0", "--port", "8001"]
+    networks:
+      - poc-logstream
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # ---------------------------------------------------------------------------
+  # LogStream Server — recebe logs via gRPC, serve via REST + WebSocket
+  # ---------------------------------------------------------------------------
+  log-server:
+    build:
+      context: ./logstream/server
+      dockerfile: Dockerfile
+    image: audaxcapitalsa/logstream-server:latest
+    container_name: poc-log-server
+    ports:
+      - "50051:50051"   # gRPC (agent -> server)
+      - "8080:8080"     # REST API + WebSocket (dashboard -> server)
+    env_file:
+      - .env.server
+    volumes:
+      - server_logs:/logs
+      - server_data:/data
+    networks:
+      - poc-logstream
+    restart: unless-stopped
+    depends_on:
+      redis-logstream:
+        condition: service_started
+
+  # ---------------------------------------------------------------------------
+  # LogStream Dashboard — frontend React com logs em tempo real
+  # ---------------------------------------------------------------------------
+  log-dashboard:
+    build:
+      context: ./logstream/dashboard
+      dockerfile: Dockerfile
+    image: audaxcapitalsa/logstream-dashboard:latest
+    container_name: poc-log-dashboard
+    ports:
+      - "3000:3000"
+    networks:
+      - poc-logstream
+    restart: unless-stopped
+    depends_on:
+      - log-server
+
+  # ---------------------------------------------------------------------------
+  # LogStream Agent — observa /app/logs e envia ao server via gRPC
+  # ---------------------------------------------------------------------------
+  log-agent:
+    build:
+      context: ./logstream/agent
+      dockerfile: Dockerfile
+    image: audaxcapitalsa/log-agent-poc:latest
+    container_name: poc-log-agent
+    env_file:
+      - .env.agent
+    volumes:
+      # SOMENTE LEITURA — agent nunca escreve nos logs originais
+      - poc_logs:/app/logs:ro
+    networks:
+      - poc-logstream
+    restart: unless-stopped
+    depends_on:
+      - log-server
+      - mock-api
+      - mock-dependencies
+      - redis-logstream
+    deploy:
+      resources:
+        limits:
+          memory: 64M
+          cpus: '0.1'
+
+  # ---------------------------------------------------------------------------
+  # Redis — offset persistence (agent) + deduplicacao (server)
+  # ---------------------------------------------------------------------------
+  redis-logstream:
+    image: redis:7-alpine
+    container_name: poc-redis-logstream
+    command:
+      - redis-server
+      - --maxmemory
+      - 64mb
+      - --maxmemory-policy
+      - allkeys-lru
+    ports:
+      - "6399:6379"
+    networks:
+      - poc-logstream
+    restart: unless-stopped
+    volumes:
+      - redis_data:/data
+    deploy:
+      resources:
+        limits:
+          memory: 64M
+          cpus: '0.1'
+
+
+volumes:
+  poc_logs:
+    driver: local
+  server_logs:
+    driver: local
+  server_data:
+    driver: local
+  redis_data:
+    driver: local
+
+
+networks:
+  poc-logstream:
+    name: poc-logstream
+    driver: bridge
