@@ -3,6 +3,8 @@ import clsx from 'clsx'
 import { api } from '../lib/api'
 import type { TaskInfo } from '../types'
 
+const PAGE_SIZE = 50
+
 interface Props {
   serviceIds: string[]
   fromTs?: number
@@ -18,8 +20,10 @@ export default function TaskBrowser({ serviceIds, fromTs, toTs, selectedTaskId, 
   const [loaded, setLoaded] = useState(false)
   const [expanded, setExpanded] = useState(true)
   const [filterText, setFilterText] = useState('')
+  const [total, setTotal] = useState(0)
+  const [page, setPage] = useState(0)
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (pageNum: number = 0) => {
     setLoading(true)
     setError(null)
     try {
@@ -27,8 +31,12 @@ export default function TaskBrowser({ serviceIds, fromTs, toTs, selectedTaskId, 
         service_ids: serviceIds.length > 0 ? serviceIds : undefined,
         from: fromTs,
         to: toTs,
+        limit: PAGE_SIZE,
+        offset: pageNum * PAGE_SIZE,
       })
       setTasks(resp.tasks)
+      setTotal(resp.total)
+      setPage(pageNum)
       setLoaded(true)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Erro ao buscar tasks')
@@ -37,7 +45,9 @@ export default function TaskBrowser({ serviceIds, fromTs, toTs, selectedTaskId, 
     }
   }, [serviceIds, fromTs, toTs])
 
-  // Group by service_id
+  const totalPages = Math.ceil(total / PAGE_SIZE)
+
+  // Group by service_id + apply text filter
   const grouped = useMemo(() => {
     const map = new Map<string, { serviceName: string; tasks: TaskInfo[] }>()
     for (const t of tasks) {
@@ -47,7 +57,6 @@ export default function TaskBrowser({ serviceIds, fromTs, toTs, selectedTaskId, 
       }
       map.get(key)!.tasks.push(t)
     }
-    // Apply text filter
     if (filterText) {
       const q = filterText.toLowerCase()
       for (const [key, group] of map) {
@@ -101,7 +110,7 @@ export default function TaskBrowser({ serviceIds, fromTs, toTs, selectedTaskId, 
         </button>
 
         <button
-          onClick={load}
+          onClick={() => load(0)}
           disabled={loading}
           className="flex items-center gap-1 px-2.5 py-1 rounded text-[10px] font-semibold bg-blue-600/80 hover:bg-blue-500 disabled:bg-blue-800 disabled:cursor-not-allowed text-white transition"
         >
@@ -120,8 +129,12 @@ export default function TaskBrowser({ serviceIds, fromTs, toTs, selectedTaskId, 
 
         {loaded && (
           <span className="text-[10px] text-gray-500">
-            {totalFiltered} task{totalFiltered !== 1 ? 's' : ''}
-            {filterText && tasks.length !== totalFiltered && ` de ${tasks.length}`}
+            {totalFiltered} de {total} task{total !== 1 ? 's' : ''}
+            {totalPages > 1 && (
+              <span className="ml-1 text-gray-600">
+                (pg {page + 1}/{totalPages})
+              </span>
+            )}
           </span>
         )}
 
@@ -146,7 +159,7 @@ export default function TaskBrowser({ serviceIds, fromTs, toTs, selectedTaskId, 
             type="text"
             value={filterText}
             onChange={e => setFilterText(e.target.value)}
-            placeholder="Filtrar tasks por ID, serviço, tipo..."
+            placeholder="Filtrar tasks por ID, servi\u00e7o, tipo..."
             className="w-full bg-gray-800 border border-gray-700 rounded px-2.5 py-1.5 text-xs text-white placeholder-gray-600 focus:outline-none focus:ring-1 focus:ring-blue-500 mb-2"
           />
 
@@ -158,7 +171,7 @@ export default function TaskBrowser({ serviceIds, fromTs, toTs, selectedTaskId, 
           <div className="max-h-[280px] overflow-y-auto space-y-2 scrollbar-thin scrollbar-thumb-gray-700">
             {grouped.size === 0 && (
               <div className="text-xs text-gray-600 text-center py-4">
-                {tasks.length === 0 ? 'Nenhum task encontrado no período.' : 'Nenhum resultado para o filtro.'}
+                {tasks.length === 0 ? 'Nenhum task encontrado no per\u00edodo.' : 'Nenhum resultado para o filtro.'}
               </div>
             )}
 
@@ -216,6 +229,29 @@ export default function TaskBrowser({ serviceIds, fromTs, toTs, selectedTaskId, 
               </div>
             ))}
           </div>
+
+          {/* Pagination */}
+          {totalPages > 1 && (
+            <div className="flex items-center justify-between mt-2 pt-2 border-t border-gray-800">
+              <button
+                onClick={() => load(page - 1)}
+                disabled={page === 0 || loading}
+                className="px-2.5 py-1 rounded text-[10px] font-medium bg-gray-800 border border-gray-700 text-gray-400 hover:text-white hover:border-gray-500 disabled:opacity-30 disabled:cursor-not-allowed transition"
+              >
+                Anterior
+              </button>
+              <span className="text-[10px] text-gray-500">
+                {page * PAGE_SIZE + 1}\u2013{Math.min((page + 1) * PAGE_SIZE, total)} de {total}
+              </span>
+              <button
+                onClick={() => load(page + 1)}
+                disabled={page >= totalPages - 1 || loading}
+                className="px-2.5 py-1 rounded text-[10px] font-medium bg-gray-800 border border-gray-700 text-gray-400 hover:text-white hover:border-gray-500 disabled:opacity-30 disabled:cursor-not-allowed transition"
+              >
+                Pr\u00f3ximo
+              </button>
+            </div>
+          )}
         </div>
       )}
     </div>

@@ -273,7 +273,7 @@ func (a *API) handleLogsByService(w http.ResponseWriter, r *http.Request) {
 }
 
 // GET /api/logs/tasks — list available task_ids with metadata
-// Params: service_id (repeatable), from (unix ms), to (unix ms)
+// Params: service_id (repeatable), from (unix ms), to (unix ms), limit, offset
 func (a *API) handleListTasks(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		jsonError(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -297,6 +297,16 @@ func (a *API) handleListTasks(w http.ResponseWriter, r *http.Request) {
 
 	fromTs := parseInt64(q.Get("from"), 0)
 	toTs := parseInt64(q.Get("to"), 0)
+	limit := int(parseInt64(q.Get("limit"), 50))
+	offset := int(parseInt64(q.Get("offset"), 0))
+
+	// Clamp limit to avoid abuse
+	if limit <= 0 || limit > 500 {
+		limit = 50
+	}
+	if offset < 0 {
+		offset = 0
+	}
 
 	tasks, err := a.store.ListTasks(serviceIDs, fromTs, toTs)
 	if err != nil {
@@ -307,9 +317,24 @@ func (a *API) handleListTasks(w http.ResponseWriter, r *http.Request) {
 		tasks = []store.TaskInfo{}
 	}
 
+	total := len(tasks)
+
+	// Apply pagination
+	if offset >= total {
+		tasks = []store.TaskInfo{}
+	} else {
+		end := offset + limit
+		if end > total {
+			end = total
+		}
+		tasks = tasks[offset:end]
+	}
+
 	jsonOK(w, map[string]interface{}{
-		"tasks": tasks,
-		"total": len(tasks),
+		"tasks":  tasks,
+		"total":  total,
+		"limit":  limit,
+		"offset": offset,
 	})
 }
 
