@@ -117,12 +117,13 @@ async def subtask_register_consulta(doc: str, parent_task_id: str):
     Sub-task background: registra a consulta no banco.
     Cria seu proprio arquivo de log.
     """
-    sub_id = f"{uuid.uuid4()}_background_task"
-    log = LogService(f"worker_background_{sub_id}").get_logger()
+    raw_id = str(uuid.uuid4())
+    task_label = f"{raw_id}_background_task"
+    log = LogService(f"worker_background_{raw_id}").get_logger()
 
-    with bind_uuid(sub_id):
+    with bind_uuid(task_label):
         log.info(
-            f"[DISPATCH:{sub_id}] Task recebida da fila "
+            f"[DISPATCH:{raw_id}] Task recebida da fila "
             f"'{QUEUES['background']}' | broker=rabbitmq | "
             f"parent_task={parent_task_id}"
         )
@@ -130,10 +131,10 @@ async def subtask_register_consulta(doc: str, parent_task_id: str):
         await asyncio.sleep(random.uniform(0.1, 0.4))
         log.info(
             f"[DOC:{doc}] Consulta registrada com sucesso | "
-            f"task_id={sub_id}"
+            f"task_id={task_label}"
         )
 
-    return {"sub_task_id": sub_id, "type": "register_consulta", "doc": doc}
+    return {"sub_task_id": task_label, "type": "register_consulta", "doc": doc}
 
 
 # ---------------------------------------------------------------------------
@@ -144,15 +145,16 @@ async def subtask_update_financeiro(doc: str, parent_task_id: str):
     Sub-task background: atualiza dados financeiros.
     Cria seu proprio arquivo de log.
     """
-    sub_id = f"{uuid.uuid4()}_background_task"
-    log = LogService(f"worker_background_{sub_id}").get_logger()
+    raw_id = str(uuid.uuid4())
+    task_label = f"{raw_id}_background_task"
+    log = LogService(f"worker_background_{raw_id}").get_logger()
 
     async with httpx.AsyncClient() as client:
         enrich_ok = await check_dependency(client, "enrichment")
 
-    with bind_uuid(sub_id):
+    with bind_uuid(task_label):
         log.info(
-            f"[DISPATCH:{sub_id}] Task recebida da fila "
+            f"[DISPATCH:{raw_id}] Task recebida da fila "
             f"'{QUEUES['background']}' | broker=rabbitmq | "
             f"parent_task={parent_task_id}"
         )
@@ -175,10 +177,10 @@ async def subtask_update_financeiro(doc: str, parent_task_id: str):
 
         log.info(
             f"[DOC:{doc}] Dados financeiros atualizados | "
-            f"task_id={sub_id}"
+            f"task_id={task_label}"
         )
 
-    return {"sub_task_id": sub_id, "type": "update_financeiro", "doc": doc}
+    return {"sub_task_id": task_label, "type": "update_financeiro", "doc": doc}
 
 
 # ---------------------------------------------------------------------------
@@ -193,12 +195,13 @@ async def subtask_enviar_resposta_teams(
     Sub-task background: envia resumo da consulta no Teams.
     Cria seu proprio arquivo de log.
     """
-    sub_id = f"{uuid.uuid4()}_background_task"
-    log = LogService(f"worker_background_{sub_id}").get_logger()
+    raw_id = str(uuid.uuid4())
+    task_label = f"{raw_id}_background_task"
+    log = LogService(f"worker_background_{raw_id}").get_logger()
 
-    with bind_uuid(sub_id):
+    with bind_uuid(task_label):
         log.info(
-            f"[DISPATCH:{sub_id}] Task recebida da fila "
+            f"[DISPATCH:{raw_id}] Task recebida da fila "
             f"'{QUEUES['background']}' | broker=rabbitmq | "
             f"parent_task={parent_task_id}"
         )
@@ -211,15 +214,15 @@ async def subtask_enviar_resposta_teams(
         if random.random() < 0.05:
             log.error(
                 f"Falha ao enviar resposta Teams | "
-                f"HTTPError 429 Too Many Requests | task_id={sub_id}"
+                f"HTTPError 429 Too Many Requests | task_id={task_label}"
             )
         else:
             log.info(
                 f"Resposta Teams enviada com sucesso | "
-                f"task_id={sub_id}"
+                f"task_id={task_label}"
             )
 
-    return {"sub_task_id": sub_id, "type": "enviar_resposta_teams"}
+    return {"sub_task_id": task_label, "type": "enviar_resposta_teams"}
 
 
 # ---------------------------------------------------------------------------
@@ -235,15 +238,16 @@ async def core_task_consulta_lote(
     Cada documento e processado sequencialmente dentro do lote,
     mas sub-tasks sao disparadas em paralelo.
     """
-    task_id = f"{uuid.uuid4()}_core_task"
-    log = LogService(f"worker_consulta_{task_id}").get_logger()
+    raw_id = str(uuid.uuid4())
+    task_label = f"{raw_id}_core_task"
+    log = LogService(f"worker_consulta_{raw_id}").get_logger()
 
     sub_tasks = []
     results = []
 
-    with bind_uuid(task_id):
+    with bind_uuid(task_label):
         log.info(
-            f"[DISPATCH:{task_id}] Task recebida da fila "
+            f"[DISPATCH:{raw_id}] Task recebida da fila "
             f"'{QUEUES['core']}' | broker=rabbitmq | "
             f"docs_no_lote={len(docs)}"
         )
@@ -333,8 +337,8 @@ async def core_task_consulta_lote(
                 f"[DOC:{doc}] Disparando sub-tasks background | "
                 f"register_consulta + update_financeiro"
             )
-            sub_tasks.append(subtask_register_consulta(doc, task_id))
-            sub_tasks.append(subtask_update_financeiro(doc, task_id))
+            sub_tasks.append(subtask_register_consulta(doc, task_label))
+            sub_tasks.append(subtask_update_financeiro(doc, task_label))
 
             log.info(
                 f"[DOC:{doc}] Consulta finalizada | "
@@ -351,7 +355,7 @@ async def core_task_consulta_lote(
         failed = sum(1 for r in results if r["status"] == "FAILED")
         log.info(
             f"Lote finalizado | total={len(docs)} ok={ok} failed={failed} | "
-            f"task_id={task_id}"
+            f"task_id={task_label}"
         )
 
     # Sub-tasks rodam em paralelo (como apply_async na producao)
@@ -359,7 +363,7 @@ async def core_task_consulta_lote(
         await asyncio.gather(*sub_tasks)
 
     return {
-        "task_id": task_id,
+        "task_id": task_label,
         "docs_processed": len(results),
         "ok": ok,
         "failed": failed,
@@ -412,12 +416,13 @@ async def simulate_chord(n_docs: int = 5):
     total_ok = sum(r["ok"] for r in lote_results)
     total_failed = sum(r["failed"] for r in lote_results)
 
-    callback_id = f"{uuid.uuid4()}_core_task"
-    callback_log = LogService(f"worker_consulta_{callback_id}").get_logger()
+    cb_raw_id = str(uuid.uuid4())
+    cb_label = f"{cb_raw_id}_core_task"
+    callback_log = LogService(f"worker_consulta_{cb_raw_id}").get_logger()
 
-    with bind_uuid(callback_id):
+    with bind_uuid(cb_label):
         callback_log.info(
-            f"[DISPATCH:{callback_id}] Callback do chord recebido | "
+            f"[DISPATCH:{cb_raw_id}] Callback do chord recebido | "
             f"lotes={len(lote_results)} | fila='{QUEUES['core']}'"
         )
         callback_log.info(
@@ -432,11 +437,11 @@ async def simulate_chord(n_docs: int = 5):
 
         callback_log.info(
             f"Disparando sub-task enviar_resposta_teams | "
-            f"task_id={callback_id}"
+            f"task_id={cb_label}"
         )
 
     # Sub-task teams (cria seu proprio log file)
-    await subtask_enviar_resposta_teams(total_ok, total_failed, callback_id)
+    await subtask_enviar_resposta_teams(total_ok, total_failed, cb_label)
 
     with bind_uuid(request_id):
         logger_api.info(
@@ -446,7 +451,7 @@ async def simulate_chord(n_docs: int = 5):
 
     return {
         "request_id": request_id,
-        "callback_id": callback_id,
+        "callback_id": cb_label,
         "lotes": len(lote_results),
         "total_ok": total_ok,
         "total_failed": total_failed,
@@ -605,13 +610,14 @@ async def simulate_batch(req: BatchRequest):
 @app.post("/simulate/error", response_model=SimulationResult)
 async def simulate_error():
     """Simula cenario de falha grave com todas as fontes fora."""
-    task_id = f"{uuid.uuid4()}_core_task"
+    raw_id = str(uuid.uuid4())
+    task_label = f"{raw_id}_core_task"
     cnpj = random.choice(CNPJS)
-    log = LogService(f"worker_consulta_{task_id}").get_logger()
+    log = LogService(f"worker_consulta_{raw_id}").get_logger()
 
-    with bind_uuid(task_id):
+    with bind_uuid(task_label):
         log.info(
-            f"[DISPATCH:{task_id}] Task recebida da fila "
+            f"[DISPATCH:{raw_id}] Task recebida da fila "
             f"'{QUEUES['core']}' | broker=rabbitmq"
         )
         log.info(f"[DOC:{cnpj}] Iniciando consulta de pessoa juridica")
@@ -637,7 +643,7 @@ async def simulate_error():
         )
         log.critical(
             f"[DOC:{cnpj}] TODAS as fontes indisponiveis | "
-            f"task {task_id} FALHOU apos 3 retries"
+            f"task {task_label} FALHOU apos 3 retries"
         )
         log.critical(
             f"[DOC:{cnpj}] Movendo para dead letter queue | "
@@ -648,7 +654,7 @@ async def simulate_error():
         status="ok",
         logs_generated=8,
         log_files_created=1,
-        details=[{"task_id": task_id, "cnpj": cnpj, "type": "error_simulation"}],
+        details=[{"task_id": task_label, "cnpj": cnpj, "type": "error_simulation"}],
     )
 
 
