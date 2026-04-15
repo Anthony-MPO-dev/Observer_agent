@@ -121,6 +121,8 @@ export const api = {
     service_ids?: string[]
     from?: number
     to?: number
+    limit?: number
+    offset?: number
   }): Promise<TaskListResponse> {
     const params = new URLSearchParams()
     if (opts.service_ids && opts.service_ids.length > 0) {
@@ -128,6 +130,8 @@ export const api = {
     }
     if (opts.from != null) params.set('from', String(opts.from))
     if (opts.to != null) params.set('to', String(opts.to))
+    if (opts.limit != null) params.set('limit', String(opts.limit))
+    if (opts.offset != null) params.set('offset', String(opts.offset))
 
     const res = await fetch(`${BASE}/api/logs/tasks?${params.toString()}`, {
       headers: authHeaders(),

@@ -77,6 +77,8 @@ export interface TaskInfo {
 export interface TaskListResponse {
   tasks: TaskInfo[]
   total: number
+  limit?: number
+  offset?: number
 }
 
 export interface DependencyStatus {
