@@ -215,11 +215,13 @@ docker compose up --build -d
 
 ## Where it came from
 
-I built LogStream for a set of Python/Celery microservices that look up company and individual records in external sources through RabbitMQ. In production:
+I built LogStream for a set of Python/Celery microservices that looked up company and individual records in external sources through RabbitMQ. In production:
 
-- the Celery workers (core, quick, background) process real CNPJ/CPF lookups through RabbitMQ;
-- the log agent runs as a sidecar, watching the shared log volume;
-- the log server runs on a central VPS and receives logs from several APIs;
-- the dashboard gives real-time monitoring with filters by service, level, document and task_id.
+- the Celery workers (core, quick, background) processed real CNPJ/CPF lookups through RabbitMQ;
+- the log agent ran as a sidecar, watching the shared log volume;
+- the log server ran on a central VPS and received logs from several APIs;
+- the dashboard gave real-time monitoring with filters by service, level, document and task_id.
+
+Later I retired it and moved production to Grafana, with Loki for logs and Tempo for traces. Once I needed traces, retention and alerting, maintaining my own tool stopped making sense. This repo stays up as the proof of concept.
 
 The architecture is mine. I used Claude Code for parts of the implementation, the same way I use any other tool.
