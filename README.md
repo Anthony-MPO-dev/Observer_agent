@@ -1,15 +1,19 @@
-# POC LogStream - Mock API
+# LogStream: real-time log observability (POC)
 
-Proof of Concept que demonstra o sistema **LogStream** em funcionamento completo.  
-Uma FastAPI mock simula workers Celery gerando logs reais, que fluem pela pipeline:
+I built LogStream because debugging my Python/Celery workers in production meant opening container after container and reading logs line by line. This repo is a proof of concept you can run locally. A mock FastAPI service plays the Celery workers and writes real log files, and the pipeline takes it from there:
 
 ```
 Mock API (Python) ──writes──> .log files ──agent reads──> gRPC ──> Server ──> Dashboard (WebSocket)
 ```
 
----
+## What's inside
 
-## Arquitetura
+- **Log agent (Go):** a sidecar that watches `.log` files with `fsnotify`, tails them, parses each line and ships batches over gRPC. It buffers locally, so nothing is lost if the server goes down.
+- **healthmon (part of the agent):** watches the error rate of the external APIs the workers depend on. Past a configurable threshold, it blocks new requests to that service, and it reopens on its own once the service recovers. Retries with backoff weren't enough, because new requests kept hitting a service that was already down.
+- **Log server (Go):** receives the gRPC streams, stores logs as `.jsonl` per service per day, and fans them out through an in-memory pub/sub hub. It also exposes REST and WebSocket.
+- **Dashboard (React 18 + TypeScript):** live logs over WebSocket, no polling, with filters by service, level, document and task ID.
+
+## Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
@@ -21,11 +25,11 @@ Mock API (Python) ──writes──> .log files ──agent reads──> gRPC �
 │  │  :8000       │                  │              │                   │
 │  └──────────────┘                  └──────────────┘                   │
 │        │                                    │                          │
-│        │ Simula:                             │                          │
-│        │ - Workers Celery                    ▼                          │
-│        │ - Consultas CNPJ/CPF      ┌──────────────┐     WebSocket     │
-│        │ - Erros e retries         │  Log Server  │ ──────────────>   │
-│        │ - Fluxos completos        │  (Go)        │                   │
+│        │ Simulates:                          │                          │
+│        │ - Celery workers                    ▼                          │
+│        │ - CNPJ/CPF lookups        ┌──────────────┐     WebSocket     │
+│        │ - Errors and retries      │  Log Server  │ ──────────────>   │
+│        │ - End-to-end flows        │  (Go)        │                   │
 │        │                           │  gRPC :50051 │    ┌────────────┐ │
 │        │                           │  HTTP  :8080 │    │ Dashboard  │ │
 │        │                           └──────────────┘    │ (React)    │ │
@@ -39,204 +43,183 @@ Mock API (Python) ──writes──> .log files ──agent reads──> gRPC �
 └─────────────────────────────────────────────────────────────────────────┘
 ```
 
-### Fluxo dos Logs
+### Log flow
 
-1. **Mock API** escreve logs em `/app/logs/` usando o `LogService` (mesmo formato da API real)
-2. **Log Agent** (Go) detecta novos arquivos `.log` via `fsnotify`, faz tail em tempo real
-3. Agent parseia cada linha extraindo: timestamp, level, uuid, documento, task_id, module
-4. Agent envia batches via **gRPC** para o **Log Server**
-5. Server persiste em arquivos `.jsonl` e publica via **Hub** (pub/sub in-memory)
-6. **Dashboard** recebe logs via **WebSocket** e renderiza em tempo real
+1. The **mock API** writes logs to `/app/logs/` with `LogService`, in the same format as the production API.
+2. The **log agent** picks up new `.log` files via `fsnotify` and tails them in real time.
+3. The agent parses each line into timestamp, level, uuid, document, task_id and module.
+4. The agent sends batches over **gRPC** to the **log server**.
+5. The server writes them to `.jsonl` files and publishes them through the **hub** (in-memory pub/sub).
+6. The **dashboard** receives them over **WebSocket** and renders them live.
 
----
+## Quick start
 
-## Quick Start
-
-### Pre-requisitos
-
-- Docker e Docker Compose
-
-### Subir a stack
+You need Docker and Docker Compose.
 
 ```bash
-# Clonar e entrar no diretorio
-cd POC_Agente
+git clone https://github.com/Anthony-MPO-dev/Observer_agent.git
+cd Observer_agent
 
-# Copiar arquivos de ambiente
+# Copy the env files
 cp .env.example .env
 cp .env.agent.example .env.agent
 cp .env.server.example .env.server
 
-# Subir tudo
+# Start everything
 docker compose up --build -d
 ```
 
-### Acessar
+| Service       | URL                        | What it is                  |
+|---------------|----------------------------|-----------------------------|
+| Mock API      | http://localhost:8000      | Swagger UI (FastAPI docs)   |
+| Mock API docs | http://localhost:8000/docs | Interactive API docs        |
+| Dashboard     | http://localhost:3000      | LogStream dashboard         |
+| Server REST   | http://localhost:8080      | log-server REST API         |
 
-| Servico      | URL                          | Descricao                       |
-|--------------|------------------------------|---------------------------------|
-| Mock API     | http://localhost:8000        | Swagger UI (FastAPI docs)       |
-| Mock API Docs| http://localhost:8000/docs   | Documentacao interativa         |
-| Dashboard    | http://localhost:3000        | LogStream Dashboard             |
-| Server REST  | http://localhost:8080        | API REST do log-server          |
+Dashboard login for the local demo: `admin` / `admin123`. Change it before you run this anywhere other than your own machine.
 
-### Login no Dashboard
+## Mock API endpoints
 
-- **Usuario:** `admin`
-- **Senha:** `admin123`
+| Method | Endpoint                     | What it does                                  |
+|--------|------------------------------|-----------------------------------------------|
+| POST   | `/simulate/consulta-cnpj`    | Simulates a CNPJ lookup (worker_core)         |
+| POST   | `/simulate/consulta-cpf`     | Simulates a CPF lookup (worker_quick)         |
+| POST   | `/simulate/batch`            | Generates a batch of mixed logs               |
+| POST   | `/simulate/error`            | Generates an error scenario with fallback     |
+| POST   | `/simulate/worker-flow`      | Full flow: API -> dispatch -> worker          |
+| POST   | `/simulate/start-continuous` | Starts continuous log generation              |
+| POST   | `/simulate/stop-continuous`  | Stops continuous log generation               |
+| GET    | `/health`                    | Health check                                  |
 
----
+CNPJ and CPF are Brazilian company and individual tax IDs. Every lookup here is simulated.
 
-## Endpoints da Mock API
-
-### Simulacoes
-
-| Metodo | Endpoint                      | Descricao                                    |
-|--------|-------------------------------|----------------------------------------------|
-| POST   | `/simulate/consulta-cnpj`     | Simula consulta CNPJ (worker_core)           |
-| POST   | `/simulate/consulta-cpf`      | Simula consulta CPF (worker_quick)           |
-| POST   | `/simulate/batch`             | Gera lote de logs variados                   |
-| POST   | `/simulate/error`             | Gera cenario de erro com fallback            |
-| POST   | `/simulate/worker-flow`       | Fluxo completo: API -> dispatch -> worker    |
-| POST   | `/simulate/start-continuous`  | Inicia geracao continua de logs              |
-| POST   | `/simulate/stop-continuous`   | Para geracao continua                        |
-| GET    | `/health`                     | Health check                                 |
-
-### Exemplos com curl
+### curl examples
 
 ```bash
-# Simular 5 consultas CNPJ
+# Simulate 5 CNPJ lookups
 curl -X POST http://localhost:8000/simulate/consulta-cnpj \
   -H "Content-Type: application/json" \
   -d '{"count": 5}'
 
-# Simular fluxo completo de worker
+# Simulate a full worker flow
 curl -X POST http://localhost:8000/simulate/worker-flow
 
-# Gerar cenario de erro
+# Generate an error scenario
 curl -X POST http://localhost:8000/simulate/error
 
-# Gerar lote de 20 logs com intervalo de 1s
+# Generate a batch of 20 logs, one per second
 curl -X POST http://localhost:8000/simulate/batch \
   -H "Content-Type: application/json" \
   -d '{"count": 20, "interval": 1.0}'
 
-# Ajustar geracao continua para 1 log/segundo
+# Set continuous generation to 1 log per second
 curl -X POST http://localhost:8000/simulate/start-continuous \
   -H "Content-Type: application/json" \
   -d '{"interval": 1.0}'
 ```
 
----
+## Log format
 
-## Formato dos Logs
-
-O `LogService` gera logs no formato padrao da API_DadosBasicos:
+`LogService` writes lines like this:
 
 ```
 2024-01-15 14:32:01 [INFO] [uuid=abc-def-123] [main.py:93] simulate_single_consulta_cnpj() - [DOC:12345678000195] Consultando fonte: receita_federal
 ```
 
-Campos extraidos pelo agent:
+Fields the agent extracts:
+
 - **timestamp**: `2024-01-15 14:32:01`
 - **level**: `INFO`
-- **uuid**: `abc-def-123` (correlacao de request)
+- **uuid**: `abc-def-123` (request correlation)
 - **module**: `main.py:93`
 - **function**: `simulate_single_consulta_cnpj`
-- **documento**: `12345678000195` (CNPJ/CPF)
-- **message**: texto completo
+- **document**: `12345678000195` (CNPJ/CPF)
+- **message**: the full text
 
----
+## Simulated workers
 
-## Tipos de Worker Simulados
+| Logger              | File it writes                              | Simulates                 |
+|---------------------|---------------------------------------------|---------------------------|
+| `worker_core`       | `dados_basicos_worker_consulta_core_*.log`  | Main Celery worker        |
+| `worker_quick`      | `dados_basicos_worker_consulta_quick_*.log` | Fast Celery worker        |
+| `worker_background` | `dados_basicos_worker_background_*.log`     | Background Celery worker  |
+| `api`               | `dados_basicos_api_*.log`                   | FastAPI/Gunicorn          |
 
-| Logger              | Arquivo gerado                              | Simula                        |
-|---------------------|---------------------------------------------|-------------------------------|
-| `worker_core`       | `dados_basicos_worker_consulta_core_*.log`  | Worker Celery principal       |
-| `worker_quick`      | `dados_basicos_worker_consulta_quick_*.log` | Worker Celery rapido          |
-| `worker_background` | `dados_basicos_worker_background_*.log`     | Worker Celery background      |
-| `api`               | `dados_basicos_api_*.log`                   | FastAPI/Gunicorn              |
-
----
-
-## Estrutura do Projeto
+## Project structure
 
 ```
-POC_Agente/
+Observer_agent/
 ├── app/
 │   ├── __init__.py
-│   ├── main.py                  # FastAPI — endpoints de simulacao
+│   ├── main.py                  # FastAPI: simulation endpoints
 │   └── services/
 │       ├── __init__.py
-│       └── log_service.py       # LogService adaptado (mesmo formato da API real)
-├── logstream/                   # LogStream — sistema completo de observabilidade
-│   ├── agent/                   # Sidecar Go — observa .log files via fsnotify
+│       └── log_service.py       # LogService (same format as the production API)
+├── logstream/                   # LogStream: the observability system
+│   ├── agent/                   # Go sidecar: watches .log files via fsnotify
 │   │   ├── Dockerfile
 │   │   ├── main.go
 │   │   └── ...                  # watcher, parser, sender, buffer, healthmon
-│   ├── server/                  # Servidor Go — gRPC + REST + WebSocket
+│   ├── server/                  # Go server: gRPC + REST + WebSocket
 │   │   ├── Dockerfile
 │   │   ├── main.go
 │   │   └── ...                  # grpc, hub, store, api, auth, cleaner
-│   ├── dashboard/               # Frontend React — visualizacao em tempo real
+│   ├── dashboard/               # React frontend: real-time view
 │   │   ├── Dockerfile
 │   │   ├── nginx.conf
 │   │   └── src/                 # React 18 + TypeScript + TailwindCSS + ApexCharts
 │   └── proto/
-│       └── logs.proto           # Schema gRPC (contrato agent <-> server)
-├── docker-compose.yml           # Stack completa (5 servicos)
-├── Dockerfile                   # Build da mock API
-├── requirements.txt             # Dependencias Python
-├── .env.example                 # Template — config da mock API
-├── .env.agent.example           # Template — config do log agent
-├── .env.server.example          # Template — config do log server
+│       └── logs.proto           # gRPC schema (agent <-> server contract)
+├── docker-compose.yml           # Full stack (5 services)
+├── Dockerfile                   # Mock API build
+├── requirements.txt             # Python dependencies
+├── .env.example                 # Mock API config template
+├── .env.agent.example           # Log agent config template
+├── .env.server.example          # Log server config template
 ├── .gitignore
 └── README.md
 ```
 
----
+## Default behavior
 
-## Comportamento Padrao
+On startup the mock API writes a log every 3 seconds on its own:
 
-Ao iniciar, a mock API **automaticamente** comeca a gerar logs a cada 3 segundos, simulando:
-- **40%** consultas CNPJ
-- **25%** consultas CPF
-- **25%** fluxos completos (API -> worker -> background)
-- **10%** erros variados (timeout, connection error, service unavailable)
+- **40%** CNPJ lookups
+- **25%** CPF lookups
+- **25%** full flows (API -> worker -> background)
+- **10%** errors (timeout, connection error, service unavailable)
 
-Isso garante que, ao abrir o dashboard, ja havera logs fluindo em tempo real.
+So the dashboard already has live logs the moment you open it.
 
----
-
-## Operacoes
+## Operations
 
 ```bash
-# Ver logs de todos os containers
+# Follow logs from every container
 docker compose logs -f
 
-# Ver logs so da mock API
+# Only the mock API
 docker compose logs -f mock-api
 
-# Ver logs do agent
+# Only the agent
 docker compose logs -f log-agent
 
-# Parar tudo
+# Stop everything
 docker compose down
 
-# Parar e limpar volumes
+# Stop and wipe volumes
 docker compose down -v
 
-# Rebuild apos alteracoes
+# Rebuild after changes
 docker compose up --build -d
 ```
 
----
+## Where it came from
 
-## Relacao com o Projeto Principal
+I built LogStream for a set of Python/Celery microservices that look up company and individual records in external sources through RabbitMQ. In production:
 
-Este POC demonstra o funcionamento do **LogStream**, sistema de observabilidade desenvolvido para a **API_DadosBasicos**. Na producao:
+- the Celery workers (core, quick, background) process real CNPJ/CPF lookups through RabbitMQ;
+- the log agent runs as a sidecar, watching the shared log volume;
+- the log server runs on a central VPS and receives logs from several APIs;
+- the dashboard gives real-time monitoring with filters by service, level, document and task_id.
 
-- Os **workers Celery** (core, quick, background) processam consultas reais de CNPJ/CPF via RabbitMQ
-- O **log agent** roda como sidecar observando o volume compartilhado de logs
-- O **log server** roda em VPS centralizada recebendo logs de multiplas APIs
-- O **dashboard** permite monitoramento em tempo real com filtros por servico, nivel, documento, task_id
+The architecture is mine. I used Claude Code for parts of the implementation, the same way I use any other tool.
